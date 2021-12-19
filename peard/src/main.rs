@@ -79,22 +79,20 @@ fn main() {
         .spawn(move || listen_on_thread(rx, callback_socket, safe_devices))
         .expect("[peard] tcp listener thread failed!");
 
-    println!("[peard] daemon initalized successfully!");
     println!(
-        "[peard] registered to interface {:?}",
+        "[peard] daemon registered to interface {:?}",
         discover_socket.local_addr().unwrap()
     );
+
     if config.flags & PeardFlags::DebugMode as u8 == PeardFlags::DebugMode as u8 {
         println!(
-            "[DEBUG] debug mode enabled, broadcasts send to {} for debugging with peard-netmon!",
+            "[peard] debug mode enabled, broadcasts send to {} for debugging with peard-netmon!",
             config.interface_port + ((config.flags & (PeardFlags::DebugMode as u8)) as u16)
         );
     }
 
     println!("Searching for devices...");
     discover_ask(&discover_socket, &config);
-
-
 
     thread::sleep(Duration::new(2, 0));
     println!("wait complete, reading device list:");
@@ -109,30 +107,30 @@ fn main() {
 }
 
 fn initalize_discover_socket(config: &PeardConfig) -> UdpSocket {
-    let discover_socket = UdpSocket::bind(SocketAddr::new(
+    let socket = UdpSocket::bind(SocketAddr::new(
         config.interface_addr,
         config.interface_port,
     ))
     .expect("[peard] Failed to bind discover socket!");
-    discover_socket
+    socket
         .set_broadcast(true)
         .expect("[peard] Failed to enable multicast on discover socket!");
-    discover_socket
+    socket
         .set_read_timeout(Some(Duration::new(config.discover_recv_timeout, 0)))
         .expect("[peard] Failed to set discover socket receive timeout!");
-    discover_socket
+    socket
 }
 
 fn initalize_calback_socket(config: &PeardConfig) -> TcpListener {
-    let callback_socket = TcpListener::bind(SocketAddr::new(
+    let listener = TcpListener::bind(SocketAddr::new(
         config.interface_addr,
         config.interface_port,
     ))
     .expect("[peard] Failed to create TCP listener!");
-    callback_socket
+    listener
         .set_nonblocking(true)
         .expect("[peard] Failed to set TCP listener to non-blocking!");
-    callback_socket
+    listener
 }
 
 fn discover_ask(socket: &UdpSocket, config: &PeardConfig) {
