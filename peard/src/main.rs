@@ -1,10 +1,14 @@
+#![allow(dead_code)]
+#![allow(unused_variables)]
+#![allow(unused_imports)]
+
 use std::collections::HashMap;
 use std::env;
-use std::io::Read;
+use std::io::{self, Read};
 use std::net::{IpAddr, Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream, UdpSocket};
-use std::sync::{Arc, Mutex, RwLock};
-use std::thread;
-use std::thread::{Builder, JoinHandle};
+use std::sync::mpsc::{self, channel, Receiver, Sender, TryRecvError};
+use std::sync::{Arc, RwLock};
+use std::thread::{self, Builder, JoinHandle};
 use std::time::Duration;
 
 enum PeardFlags {
@@ -65,12 +69,14 @@ fn main() {
     let callback_socket = initalize_calback_socket(&config);
 
     // initialize concurrency-safe queue for tcplistener
-    //let tcp_queue = Arc::new(ConcurrentQueue::<Callback>::unbounded());
-    let devices = Arc::new(RwLock::new(DeviceMap::new()));
+    let (tx, rx): (Sender<bool>, Receiver<bool>) = mpsc::channel();
+    let devices = Arc::new(RwLock::new(DeviceList::new()));
+    // create a safe (cloned arc) version of devices list
+    // to give to the listener thread
     let safe_devices = Arc::clone(&devices);
     let tcp_thread_handle = thread::Builder::new()
         .name(String::from("pear_listener"))
-        .spawn(move || listen_on_thread(callback_socket, safe_devices))
+        .spawn(move || listen_on_thread(rx, callback_socket, safe_devices))
         .expect("[peard] tcp listener thread failed!");
 
     println!("[peard] daemon initalized successfully!");
@@ -87,15 +93,19 @@ fn main() {
 
     println!("Searching for devices...");
     discover_ask(&discover_socket, &config);
-    thread::sleep(Duration::new(5, 0));
-    // println!(
-    //     "device 0: {:?}",
-    //     devices.read().unwrap().get(&0).expect("HARD FAIL").ip_addr
-    // );
 
-    // ensure thread finishes executing before ending main function
-    // not sure if this is necessary at all
-    tcp_thread_handle.join().unwrap();
+
+
+    thread::sleep(Duration::new(2, 0));
+    println!("wait complete, reading device list:");
+    let devices_reader = devices.read().unwrap();
+    for device in devices_reader.iter() {
+        println!("device: {:?}", device.id);
+    }
+    drop(devices_reader);
+
+    // gracefully terminate the tcp listener thread
+    let _ = tx.send(true);
 }
 
 fn initalize_discover_socket(config: &PeardConfig) -> UdpSocket {
@@ -120,6 +130,9 @@ fn initalize_calback_socket(config: &PeardConfig) -> TcpListener {
     ))
     .expect("[peard] Failed to create TCP listener!");
     callback_socket
+        .set_nonblocking(true)
+        .expect("[peard] Failed to set TCP listener to non-blocking!");
+    callback_socket
 }
 
 fn discover_ask(socket: &UdpSocket, config: &PeardConfig) {
@@ -136,10 +149,15 @@ fn discover_ask(socket: &UdpSocket, config: &PeardConfig) {
         .expect("[peard] unable to send broadcast message!");
 }
 
-fn listen_on_thread(listener: TcpListener, map: Arc<RwLock<DeviceMap>>) {
+fn listen_on_thread(rx: Receiver<bool>, listener: TcpListener, map: Arc<RwLock<DeviceList>>) {
+    println!(
+        "[peard] starting tcp listener on thread {}",
+        thread::current().name().unwrap()
+    );
     for stream in listener.incoming() {
         match stream {
             Ok(mut stream) => {
+                let _ = stream.set_nonblocking(false);
                 println!("[tcp] recv {:?}", stream.peer_addr());
                 if let Ok(peer) = stream.peer_addr() {
                     if let Some(addr) = match peer.ip() {
@@ -157,17 +175,39 @@ fn listen_on_thread(listener: TcpListener, map: Arc<RwLock<DeviceMap>>) {
                             + ((buffer[3] as u32) << 24);
                         println!("[tcp] [payload] device_id: {}", id);
                         // register new device if it doesnt exist
-                        map.write()
-                            .unwrap()
-                            .entry(id)
-                            .or_insert(Device::new(0, addr));
+                        let devices_reader = map.read().unwrap();
+                        if let None = devices_reader.iter().find(|&device| device.id == id) {
+                            drop(devices_reader);
+                            let mut devices_writer = map.write().unwrap();
+                            devices_writer.push(Device::new(id, addr));
+                            println!("[tcp] [payload] registered device {}", id);
+                            drop(devices_writer);
+                        }
                     }
-                    //stream.shutdown(Shutdown::Both).unwrap();
                 }
+                println!("[tcp] term {:?}", stream.peer_addr());
+                stream.shutdown(Shutdown::Both).unwrap();
+            }
+            Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
+                // Decide if we should exit
+                match rx.try_recv() {
+                    Ok(_) | Err(TryRecvError::Disconnected) => {
+                        println!(
+                            "[tcp] terminating tcp listener on thread {}",
+                            thread::current().name().unwrap()
+                        );
+                        break;
+                    }
+                    Err(TryRecvError::Empty) => {}
+                }
+                // Decide if we should try to accept a connection again
+                thread::sleep(Duration::from_micros(100));
+                continue;
             }
             Err(e) => {
                 println!("[tcp] [FAIL]: {}", e);
             }
         }
     }
+    //listener.close
 }
