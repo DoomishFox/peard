@@ -16,6 +16,7 @@ enum PeardFlags {
     DebugMode = 1,
 }
 
+#[derive(Copy, Clone)]
 struct PeardConfig {
     flags: u8,
     interface_addr: IpAddr,
@@ -65,27 +66,41 @@ fn main() {
     };
 
     println!("[peard] initializing daemon...");
-    // initalize doscovery broadcast socket
-    let discover_socket = initalize_discover_socket(&config);
-    // initialize callback receive socket
+    // initalize doscovery udp socket
+    let udp_socket = initalize_discover_socket(&config);
+    // initialize callback tcp socket
     let tcp_listener = initialize_tcp_listener(&config);
-
-    // initialize concurrency-safe queue for tcplistener
-    let (dack_tx, dack_rx): (Sender<bool>, Receiver<bool>) = mpsc::channel();
-    let devices = Arc::new(RwLock::new(DeviceList::new()));
-    // create a safe (cloned arc) version of devices list
-    // to give to the listener thread
-    let safe_devices = Arc::clone(&devices);
-    let safe_debug_printing = (config.flags & (PeardFlags::DebugMode as u8)) == 1;
-    let tcp_thread_handle = thread::Builder::new()
-        .name(String::from("dack_t"))
-        .spawn(move || tcp_listen(dack_rx, tcp_listener, safe_devices, safe_debug_printing))
-        .expect("[peard] tcp listener thread failed!");
 
     println!(
         "[peard] daemon registered to interface {:?}",
-        discover_socket.local_addr()
+        udp_socket.local_addr()
     );
+
+    // initialize channel for disc listener
+    let (disc_tx, disc_rx): (Sender<u8>, Receiver<u8>) = mpsc::channel();
+    // initialize channel for dack listener
+    let (dack_tx, dack_rx): (Sender<bool>, Receiver<bool>) = mpsc::channel();
+
+    let udpsafe_debug_printing = (config.flags & (PeardFlags::DebugMode as u8)) == 1;
+    let udp_thread_handle = thread::Builder::new()
+        .name(String::from("disc_t"))
+        .spawn(move || udp_listen_t(disc_rx, udp_socket, &config, udpsafe_debug_printing))
+        .expect("[peard] udp thread failed!");
+
+    // initialize concurrency-safe queue for dack listener
+    let devices = Arc::new(RwLock::new(DeviceList::new()));
+    // create a safe (cloned arc) version of devices list to give to the listener thread
+    let safe_devices = Arc::clone(&devices);
+
+    let tcpsafe_debug_printing = (config.flags & (PeardFlags::DebugMode as u8)) == 1;
+    // create DACK listener thread
+    let tcp_thread_handle = thread::Builder::new()
+        .name(String::from("dack_t"))
+        .spawn(move || tcp_listen_t(dack_rx, tcp_listener, safe_devices, tcpsafe_debug_printing))
+        .expect("[peard] tcp listener thread failed!");
+
+    // daemon initialization complete
+    println!("[peard] daemon initialization success!");
 
     if config.flags & PeardFlags::DebugMode as u8 == PeardFlags::DebugMode as u8 {
         println!(
@@ -95,11 +110,13 @@ fn main() {
     }
 
     println!("[peard] discovering devices...");
-    discover_ask(&discover_socket, &config);
+    //discover_ask(&udp_socket, &config);
+    trigger_discover(&disc_tx);
 
     // wait for two seconds and rebroadcast discovery message
     thread::sleep(Duration::new(2, 0));
-    discover_ask(&discover_socket, &config);
+    //discover_ask(&udp_socket, &config);
+    trigger_discover(&disc_tx);
 
     // wait for two more seconds to ensure all responses have arrived
     thread::sleep(Duration::new(2, 0));
@@ -113,6 +130,10 @@ fn main() {
 
     // gracefully terminate the tcp listener thread
     let _ = dack_tx.send(true);
+    //gracefully terminate the udp listener thread
+    let _ = disc_tx.send(0);
+    tcp_thread_handle.join().unwrap();
+    udp_thread_handle.join().unwrap();
 }
 
 fn initalize_discover_socket(config: &PeardConfig) -> UdpSocket {
@@ -125,7 +146,7 @@ fn initalize_discover_socket(config: &PeardConfig) -> UdpSocket {
         .set_broadcast(true)
         .expect("[peard] failed to enable multicast on discover socket!");
     socket
-        .set_read_timeout(Some(Duration::new(config.discover_recv_timeout, 0)))
+        .set_read_timeout(Some(Duration::from_micros(config.discover_recv_timeout)))
         .expect("[peard] failed to set discover socket receive timeout!");
     socket
 }
@@ -142,21 +163,11 @@ fn initialize_tcp_listener(config: &PeardConfig) -> TcpListener {
     listener
 }
 
-fn discover_ask(socket: &UdpSocket, config: &PeardConfig) {
-    println!("[upd] sending broadcast message");
-    let data: [u8; 10] = [0; 10];
-    socket
-        .send_to(
-            &data,
-            SocketAddr::new(
-                IpAddr::V4(Ipv4Addr::new(255, 255, 255, 255)),
-                config.interface_port + ((config.flags & (PeardFlags::DebugMode as u8)) as u16),
-            ),
-        )
-        .expect("[peard] unable to send broadcast message!");
+fn trigger_discover(tx: &Sender<u8>) {
+    let _ = tx.send(1);
 }
 
-fn tcp_listen(
+fn tcp_listen_t(
     rx: Receiver<bool>,
     listener: TcpListener,
     map: Arc<RwLock<DeviceList>>,
@@ -219,7 +230,7 @@ fn tcp_listen(
                 match rx.try_recv() {
                     Ok(_) | Err(TryRecvError::Disconnected) => {
                         println!(
-                            "[tcp] terminating DACK listener on thread {}",
+                            "[peard] terminating DACK listener on thread {}",
                             thread::current().name().unwrap()
                         );
                         break;
@@ -237,34 +248,65 @@ fn tcp_listen(
     }
 }
 
-fn udp_listen(rx: Receiver<bool>, socket: &UdpSocket, config: &PeardConfig, debug_printing: bool) {
+fn udp_listen_t(rx: Receiver<u8>, socket: UdpSocket, config: &PeardConfig, debug_printing: bool) {
     println!(
-        "[peard] starting DISC listener on thread {}",
+        "[peard] starting DISC worker on thread {}",
         thread::current().name().unwrap()
     );
     loop {
-        let mut recv_buffer: [u8; 5] = [0; 5];
-        if let Ok((n, mut addr)) = socket.recv_from(&mut recv_buffer) {
-            if debug_printing {println!("[udp] recv {:?}", addr);}
-            addr.set_port(1700);
-            match TcpStream::connect(addr) {
-                Ok(mut stream) => {
-                    let mut data = [0u8; 10];
-                    let id = config.device_id;
-                    if debug_printing {println!("[peard] responding to DISC from {}", addr);}
-                    data[0] = 1;
-                    data[1] = id as u8;
-                    data[2] = (id >> 8) as u8;
-                    data[3] = (id >> 16) as u8;
-                    data[4] = (id >> 24) as u8;
-                    stream.write(&data).expect("[tcp] failed to write to DACK connection!");
-                    stream.shutdown(Shutdown::Both).unwrap();
+        match rx.try_recv() {
+            Ok(1) => {
+                if debug_printing {
+                    println!("[upd] sending broadcast message");
                 }
-                Err(e) => {
-                    println!("[tcp] failed to connect on DACK: {}", e);
+                let data: [u8; 10] = [0; 10];
+                socket
+                    .send_to(
+                        &data,
+                        SocketAddr::new(
+                            IpAddr::V4(Ipv4Addr::new(255, 255, 255, 255)),
+                            config.interface_port
+                                + ((config.flags & (PeardFlags::DebugMode as u8)) as u16),
+                        ),
+                    )
+                    .expect("[peard] unable to send broadcast message!");
+            }
+            Ok(0) | Err(TryRecvError::Disconnected) => {
+                println!(
+                    "[peard] terminating DISC worker on thread {}",
+                    thread::current().name().unwrap()
+                );
+                break;
+            }
+            Ok(_) | Err(TryRecvError::Empty) => {
+                // check for incomping broadcast
+                let mut recv_buffer: [u8; 5] = [0; 5];
+                if let Ok((n, mut addr)) = socket.recv_from(&mut recv_buffer) {
+                    if debug_printing {
+                        println!("[udp] recv {:?}", addr);
+                    }
+                    addr.set_port(1700);
+                    match TcpStream::connect(addr) {
+                        Ok(mut stream) => {
+                            let mut data = [0u8; 10];
+                            let id = config.device_id;
+                            println!("[peard] responding to DISC from {}", addr);
+                            data[0] = 1;
+                            data[1] = id as u8;
+                            data[2] = (id >> 8) as u8;
+                            data[3] = (id >> 16) as u8;
+                            data[4] = (id >> 24) as u8;
+                            stream
+                                .write(&data)
+                                .expect("[tcp] failed to write to DACK connection!");
+                            stream.shutdown(Shutdown::Both).unwrap();
+                        }
+                        Err(e) => {
+                            println!("[tcp] failed to connect on DACK: {}", e);
+                        }
+                    }
                 }
             }
         }
-        thread::sleep(Duration::from_secs(1));
     }
 }
