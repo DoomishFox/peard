@@ -50,10 +50,11 @@ fn discovery_ack(sender: Sender) {
             let mut data = [0u8; 10];
             let id = dumb_rand();
             println!("simulating device {}", id);
-            data[0] = id as u8;
-            data[1] = (id >> 8) as u8;
-            data[2] = (id >> 16) as u8;
-            data[3] = (id >> 24) as u8;
+            data[0] = 1;
+            data[1] = id as u8;
+            data[2] = (id >> 8) as u8;
+            data[3] = (id >> 16) as u8;
+            data[4] = (id >> 24) as u8;
             stream.write(&data).expect("Failed to write to stream!");
         }
         Err(e) => {
