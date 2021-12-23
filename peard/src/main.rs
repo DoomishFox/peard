@@ -2,14 +2,16 @@ mod pear;
 mod tcp;
 mod udp;
 
+use ipipe::Pipe;
 use std::env;
+use std::io::Read;
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, RwLock};
 use std::thread::{self};
 use std::time::Duration;
 
-use pear::{DeviceList, PeardConfig, PeardFlags};
+use pear::{DeviceList, PeardConfig, PeardFlags, PipeHeader};
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -62,7 +64,9 @@ fn main() {
     // create DACK listener thread
     let tcp_thread_handle = thread::Builder::new()
         .name(String::from("dack_t"))
-        .spawn(move || tcp::tcp_listen_t(dack_rx, tcp_listener, safe_devices, tcpsafe_debug_printing))
+        .spawn(move || {
+            tcp::tcp_listen_t(dack_rx, tcp_listener, safe_devices, tcpsafe_debug_printing)
+        })
         .expect("[peard] tcp listener thread failed!");
 
     // daemon initialization complete
@@ -74,6 +78,37 @@ fn main() {
             config.interface_port + ((config.flags & (PeardFlags::DebugMode as u8)) as u16)
         );
     }
+
+    // initialize named pipe
+    let mut pipe = Pipe::with_name("peard-server").expect("[peard] failed to create pipe!");
+    println!("[peard] pipe created at {}", pipe.path().display());
+
+    let mut pipe_buffer = [0u8; 8];
+    match pipe.read_exact(&mut pipe_buffer) {
+        Ok(()) => {
+            if config.flags & (PeardFlags::DebugMode as u8) == PeardFlags::DebugMode as u8 {
+                println!("[pipe] recv");
+            }
+            let header = PipeHeader::new(pipe_buffer);
+            match header.d_type {
+                0 => {
+                    // request current device list
+                    let devices_reader = devices.read().unwrap();
+                    for device in devices_reader.iter() {
+                        println!("device: {:?}", device.id);
+                    }
+                }
+                _ => {}
+            }
+        }
+        Err(e) => {
+            println!("[peard] pipe error: {}", e);
+        }
+    }
+
+    // for line in std::io::BufReader::new(pipe).lines() {
+    //     read_pipe(&line.unwrap().as_str());
+    // }
 
     println!("[peard] discovering devices...");
     //discover_ask(&udp_socket, &config);
@@ -100,4 +135,12 @@ fn main() {
     let _ = disc_tx.send(0);
     tcp_thread_handle.join().unwrap();
     udp_thread_handle.join().unwrap();
+}
+
+fn read_pipe(line: &str) {
+    println!("incoming from pipe: {}", line);
+    match line {
+        "" => {}
+        _ => {}
+    }
 }
