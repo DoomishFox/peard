@@ -65,7 +65,7 @@ pub fn udp_listen_t(rx: Receiver<u8>, socket: UdpSocket, config: &PeardConfig, d
                     addr.set_port(config.interface_port);
                     match TcpStream::connect(addr) {
                         Ok(mut stream) => {
-                            let mut data = [0u8; 10];
+                            let mut data = [0u8; 5];
                             let id = config.device_id;
                             println!("[peard] responding to DISC from {}", addr);
                             data[0] = 1;

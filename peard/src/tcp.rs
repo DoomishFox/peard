@@ -41,7 +41,7 @@ pub fn tcp_listen_t(
                         IpAddr::V4(ip) => Some(ip.octets()),
                         _ => None,
                     } {
-                        let mut buffer = [0u8; 10];
+                        let mut buffer = [0u8; 5];
                         stream.read_exact(&mut buffer).unwrap();
                         if debug_printing {
                             println!("[tcp] raw: {:?}", buffer);
@@ -67,6 +67,9 @@ pub fn tcp_listen_t(
                                     println!("[peard] registered new device {}", id);
                                     drop(devices_writer);
                                 }
+                            }
+                            10 => {
+                                // handle incoming SEND
                             }
                             _ => {}
                         }

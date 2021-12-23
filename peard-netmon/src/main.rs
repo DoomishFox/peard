@@ -35,7 +35,7 @@ fn main() {
 }
 
 fn discovery_recv(socket: &UdpSocket) -> Option<Sender> {
-    let mut recv_buffer: [u8; 10] = [0; 10];
+    let mut recv_buffer = [0u8; 5];
     if let Ok((n, addr)) = socket.recv_from(&mut recv_buffer) {
         println!("udp: recv {} bytes from {:?}", n, addr);
         return Some(Sender::new(addr));
@@ -47,7 +47,7 @@ fn discovery_ack(sender: Sender) {
     match TcpStream::connect(sender.sck_addr) {
         Ok(mut stream) => {
             println!("Connected to sender: {}", sender.id);
-            let mut data = [0u8; 10];
+            let mut data = [0u8; 5];
             let id = dumb_rand();
             println!("simulating device {}", id);
             data[0] = 1;

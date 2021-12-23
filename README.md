@@ -23,4 +23,3 @@ Valid message types are:
 - `0x01` - DACK (Discover Acknowledge): TCP response to a DISC message. Will include some device information in the payload.
 - `0x02` - IREQ (Information Request): TCP message requesting a new DACK response from a specific device.
 - `0x10` - SEND (Send): TCP message containing data to be shared with a device.
-- `0x11` - SACK (Send Acknowledge): TCP response to a SEND message.

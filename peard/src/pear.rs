@@ -16,6 +16,7 @@ pub struct PeardConfig {
 pub struct Device {
     pub id: u32,
     pub name: [u8; 20],
+    pub name_len: u8,
     pub ip_addr: [u8; 4],
     // compressed ECC public key is apparently 256 + 1
     // this should fit inside a 64 byte integer just fine
@@ -26,6 +27,7 @@ impl Device {
         Device {
             id: id,
             name: [0; 20],
+            name_len: 0,
             ip_addr: addr,
             pbl_key: 0,
         }
@@ -33,6 +35,7 @@ impl Device {
     pub fn to_pipe(&self) -> [u8; 25] {
         let mut buf = [0u8; 25];
         buf[..3].clone_from_slice(&self.id.to_ne_bytes());
+        buf[4] = self.name_len;
         buf[5..].clone_from_slice(&self.name[..]);
         buf
     }
@@ -47,7 +50,7 @@ pub struct PipeHeader {
     pub p_len: u16,
 }
 impl PipeHeader {
-    pub fn new(buf: [u8; 8]) -> PipeHeader {
+    pub fn parse(buf: [u8; 8]) -> PipeHeader {
         PipeHeader {
             d_type: buf[0],
             r_flag: buf[1],

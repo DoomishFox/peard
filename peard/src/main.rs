@@ -4,8 +4,8 @@ mod udp;
 
 use ipipe::Pipe;
 use std::env;
-use std::io::Read;
-use std::net::{IpAddr, Ipv4Addr};
+use std::io::{Read, Write};
+use std::net::{IpAddr, Ipv4Addr, Shutdown, SocketAddr, TcpStream};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, RwLock};
 use std::thread::{self};
@@ -89,16 +89,79 @@ fn main() {
             if config.flags & (PeardFlags::DebugMode as u8) == PeardFlags::DebugMode as u8 {
                 println!("[pipe] recv");
             }
-            let header = PipeHeader::new(pipe_buffer);
-            match header.d_type {
-                0 => {
-                    // request current device list
-                    let devices_reader = devices.read().unwrap();
-                    for device in devices_reader.iter() {
-                        println!("device: {:?}", device.id);
+            let header = PipeHeader::parse(pipe_buffer);
+            if header.r_flag == 0 {
+                // if return flag is not set
+                match header.d_type {
+                    0 => {
+                        // request current device list
+                        // let devices_reader = devices.read().unwrap();
+                        // for device in devices_reader.iter() {
+                        //     println!("device: {:?}", device.id);
+                        // }
+                        // drop(devices_reader);
                     }
+                    2 => {
+                        // request refreshed device list
+                        println!("[peard] discovering devices...");
+                        udp::discover(&disc_tx);
+                        // wait for two seconds and rebroadcast discovery message
+                        thread::sleep(Duration::new(2, 0));
+                        udp::discover(&disc_tx);
+                        // wait for two more seconds to ensure all responses have arrived
+                        thread::sleep(Duration::new(2, 0));
+                        // println!("[peard] discovery complete!");
+                        // let devices_reader = devices.read().unwrap();
+                        // for device in devices_reader.iter() {
+                        //     println!("device: {:?}", device.id);
+                        // }
+                        // drop(devices_reader);
+                    }
+                    10 => {
+                        // send data payload to target device
+                        let devices_reader = devices.read().unwrap();
+                        if let Some(target_device) = devices_reader
+                            .iter()
+                            .find(|&device| device.id == header.target_id)
+                        {
+                            match TcpStream::connect(SocketAddr::new(
+                                IpAddr::from(target_device.ip_addr),
+                                config.interface_port,
+                            )) {
+                                Ok(mut stream) => {
+                                    let mut data = [0u8; 5];
+                                    let id = config.device_id;
+                                    println!("[tcp] SEND to {:?}", stream.peer_addr());
+                                    // set up message header
+                                    data[0] = 10;
+                                    data[1..4].clone_from_slice(&id.to_be_bytes());
+                                    // write header to tcp stream
+                                    stream
+                                        .write(&data)
+                                        .expect("[tcp] failed to write to SEND connection!");
+                                    let cursor_pos = 0;
+                                    while cursor_pos < header.p_len {}
+
+                                    if config.flags & (PeardFlags::DebugMode as u8)
+                                        == PeardFlags::DebugMode as u8
+                                    {
+                                        println!("[tcp] term {:?}", stream.peer_addr());
+                                    }
+                                    stream.shutdown(Shutdown::Both).unwrap();
+                                }
+                                Err(e) => {
+                                    println!(
+                                        "[peard] failed to connect to device {}: {}",
+                                        header.target_id, e
+                                    );
+                                }
+                            }
+                        } else {
+                            println!("[peard] WARN: device {} not in registry!", header.target_id);
+                        }
+                    }
+                    _ => {}
                 }
-                _ => {}
             }
         }
         Err(e) => {
@@ -106,41 +169,10 @@ fn main() {
         }
     }
 
-    // for line in std::io::BufReader::new(pipe).lines() {
-    //     read_pipe(&line.unwrap().as_str());
-    // }
-
-    println!("[peard] discovering devices...");
-    //discover_ask(&udp_socket, &config);
-    udp::discover(&disc_tx);
-
-    // wait for two seconds and rebroadcast discovery message
-    thread::sleep(Duration::new(2, 0));
-    //discover_ask(&udp_socket, &config);
-    udp::discover(&disc_tx);
-
-    // wait for two more seconds to ensure all responses have arrived
-    thread::sleep(Duration::new(2, 0));
-
-    println!("[peard] discovery complete!");
-    let devices_reader = devices.read().unwrap();
-    for device in devices_reader.iter() {
-        println!("device: {:?}", device.id);
-    }
-    drop(devices_reader);
-
     // gracefully terminate the tcp listener thread
     let _ = dack_tx.send(true);
     //gracefully terminate the udp listener thread
     let _ = disc_tx.send(0);
     tcp_thread_handle.join().unwrap();
     udp_thread_handle.join().unwrap();
-}
-
-fn read_pipe(line: &str) {
-    println!("incoming from pipe: {}", line);
-    match line {
-        "" => {}
-        _ => {}
-    }
 }
