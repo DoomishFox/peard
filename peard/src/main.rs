@@ -28,9 +28,9 @@ fn main() {
     let config = PeardConfig {
         flags: peard_flags,
         interface_addr: IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)),
-        interface_port: 17000,
+        interface_port: 17001,
         discover_recv_timeout: 5,
-        device_id: 1234,
+        device_id: 1235,
     };
 
     println!("[peard] initializing daemon...");

@@ -41,20 +41,21 @@ pub fn tcp_listen_t(
                         IpAddr::V4(ip) => Some(ip.octets()),
                         _ => None,
                     } {
-                        let mut buffer = [0u8; 5];
-                        stream.read_exact(&mut buffer).unwrap();
+                        let mut buffer = [0u8; 32];
+                        stream.read(&mut buffer).unwrap();
                         if debug_printing {
                             println!("[tcp] raw: {:?}", buffer);
                         }
 
-                        let msg_type = buffer[0];
+                        let msg_type = buffer[5];
                         let id: u32 = 0
-                            + (buffer[1] as u32)
-                            + ((buffer[2] as u32) << 8)
-                            + ((buffer[3] as u32) << 16)
-                            + ((buffer[4] as u32) << 24);
+                            + (buffer[6] as u32)
+                            + ((buffer[7] as u32) << 8)
+                            + ((buffer[8] as u32) << 16)
+                            + ((buffer[9] as u32) << 24);
+                        let version = buffer[4];
                         if debug_printing {
-                            println!("[tcp] [payload] device_id: {}", id);
+                            println!("[tcp] [payload] version: {}, device_id: {}", version, id);
                         }
 
                         match msg_type {

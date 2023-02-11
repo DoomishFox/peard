@@ -54,8 +54,8 @@ impl PipeHeader {
         PipeHeader {
             d_type: buf[0],
             r_flag: buf[1],
-            target_id: u32::from_ne_bytes(buf[2..5].try_into().unwrap()),
-            p_len: u16::from_ne_bytes(buf[6..7].try_into().unwrap()),
+            target_id: u32::from_ne_bytes(buf[2..5].try_into().unwrap_or([0u8; 4])),
+            p_len: u16::from_ne_bytes(buf[6..7].try_into().unwrap_or([0u8; 2])),
         }
     }
 }

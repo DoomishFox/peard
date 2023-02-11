@@ -36,7 +36,7 @@ pub fn udp_listen_t(rx: Receiver<u8>, socket: UdpSocket, config: &PeardConfig, d
                 if debug_printing {
                     println!("[upd] sending broadcast message");
                 }
-                let data: [u8; 10] = [0; 10];
+                let data: [u8; 10] = [0xF0, 0x9F, 0x8D, 0x90, 0x00, 1,2,3,5, 0];
                 socket
                     .send_to(
                         &data,
